@@ -70,7 +70,7 @@ export function App() {
   const MemoizedRadioController = useMemo(() => React.memo(RadioController), []);
   const MemoizedChatBox = useMemo(() => React.memo(ChatBox), []);
   return (
-    <Router basename="/apps/radio">
+    <Router>
       <Routes>
         <Route path="/" element={<MemoizedRadioController />} />
         <Route path="/chat" element={<MemoizedChatBox />} />

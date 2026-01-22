@@ -8,7 +8,7 @@ import { Radio } from './lib';
 
 
 export async function initializeApi(): Promise<Radio> {
-  const radio = new Radio;
+  const radio = await Radio.create();
   return radio;
 }
 

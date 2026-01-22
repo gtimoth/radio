@@ -18,7 +18,7 @@ export const ChatColumn: FC<IChatColumn> = (props: IChatColumn) => {
 
   const inputReference = useRef<HTMLTextAreaElement>(null);
 
-  const radio = new Radio();
+  const radio = window.radio;
 
   const fullscreen = props.fullscreen;
   let maxWidth = isMobile ? "100%" : "33%";
@@ -39,8 +39,8 @@ export const ChatColumn: FC<IChatColumn> = (props: IChatColumn) => {
 
 
 
-  function processInput() {
-    radio.handleUserInput(dispatch);
+  async function processInput() {
+    await radio.handleUserInput(dispatch);
   }
 
   const InputBox = () => {
@@ -49,7 +49,7 @@ export const ChatColumn: FC<IChatColumn> = (props: IChatColumn) => {
       if (currentTime - lastClickTimeRef.current >= 1000) {
         if (inputReference.current) {
           inputReference.current.value = message;
-          processInput();
+          void processInput();
         }
         lastClickTimeRef.current = currentTime;
       }
@@ -82,14 +82,16 @@ export const ChatColumn: FC<IChatColumn> = (props: IChatColumn) => {
             onKeyDown={(e: React.KeyboardEvent<HTMLTextAreaElement>) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                processInput();
+                void processInput();
               }
             }}
             style={{ width: "100%", boxSizing: "border-box", resize: "none"}}
           />
           <button
             className="px-4 py-2 ml-2 outline-none border-gray-300 border-l"
-            onClick={() => processInput()}
+            onClick={() => {
+              void processInput();
+            }}
             style={{
               userSelect:"none",
             }}

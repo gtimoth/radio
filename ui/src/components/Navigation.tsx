@@ -1,4 +1,4 @@
-import React, { FC, useEffect, useRef, useState } from "react";
+import React, { FC, useCallback, useEffect, useState } from "react";
 import { useAppSelector, useAppDispatch } from "../app/hooks";
 import { NavItem } from "./NavItem";
 import {
@@ -12,20 +12,19 @@ import {
   selectOurTowerDescription,
   setHasPublishedStation,
   selectTunePatP,
+  setOurTowerDescription,
 } from "../features/ui/uiSlice";
-import { isOlderThanNMinutes, maxTowerAgeInMinutes, timestampFromTime } from "../util";
-
-interface IMinitower {
-  location: string;
-  description: string;
-  time: number;
-  viewers: number;
-}
+import {
+  isOlderThanNMinutes,
+  maxTowerAgeInMinutes,
+  timestampFromTime,
+} from "../util";
+import { StationSummary } from "../lib";
 
 
-function splitMinitowersByAge(minitowers: IMinitower[]): {
-  newTowers: IMinitower[];
-  oldTowers: IMinitower[];
+function splitMinitowersByAge(minitowers: StationSummary[]): {
+  newTowers: StationSummary[];
+  oldTowers: StationSummary[];
 } {
   // Split the Minitowers into two arrays
   const newTowers = minitowers.filter(
@@ -49,43 +48,35 @@ export const Navigation: FC = () => {
   const navigationOpen = useAppSelector(selectNavigationOpen);
   const dispatch = useAppDispatch();
 
-  const [towers, setTowers] = useState<Array<IMinitower>>([]);
+  const [towers, setTowers] = useState<Array<StationSummary>>([]);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const refreshTowers = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      const listings = await radio.fetchStations();
+      const { newTowers, oldTowers } = splitMinitowersByAge(listings);
+      newTowers.sort((a, b) => b.viewers - a.viewers);
+      oldTowers.sort((a, b) => b.time - a.time);
+      setTowers([...newTowers, ...oldTowers]);
+    } catch (err) {
+      console.warn("failed to load stations", err);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [radio]);
 
   useEffect(() => {
-    console.log('subscribing to tower /greg/local from navigation')
-    radio.api.subscribe({
-      app: "tower",
-      path: "/greg/local",
-      event: (e) => {
-        console.log("greg update", e);
-        if (!e["response"]) return;
+    refreshTowers();
+  }, [refreshTowers]);
 
-        let allTowers = e.response;
-        // split towers into new and old
-        // then sort new by # of viewers and old by most recent
-        let { newTowers, oldTowers } = splitMinitowersByAge(allTowers);
-        newTowers.sort(function (a: any, b: any) {
-          return b.viewers - a.viewers;
-        });
-        oldTowers.sort(function (a: any, b: any) {
-          return b.time - a.time;
-        });
-
-        let sortedTowers: IMinitower[] = [];
-        sortedTowers = sortedTowers.concat(newTowers, oldTowers);
-        setTowers(sortedTowers);
-      },
-      quit: () => alert("(greg) lost connection to your urbit. please refresh"),
-      err: (e) => console.log("radio err", e),
-    }).then((subscriptionId) => {
-      //
-      console.log('greg subscription successful')
-      window.addEventListener("beforeunload", () => {
-        radio.api.unsubscribe(subscriptionId);
-      });
-    });
-    radio.gregRequest();
-  }, []);
+  useEffect(() => {
+    if (!navigationOpen) return;
+    const interval = setInterval(() => {
+      void refreshTowers();
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [navigationOpen, refreshTowers]);
 
   const [currentTime, setCurrentTime] = useState(new Date().getTime() / 1000);
 
@@ -95,35 +86,6 @@ export const Navigation: FC = () => {
     }, 1000);
     return () => clearInterval(intervalId);
   }, []);
-
-  useInterval(() => {
-    if (!hasPublishedStation) return;
-
-    // heartbeat to update our slot in the discovery pool
-    console.log("sending greg heartbeat");
-
-    // get fresh state
-    radio.gregPut(ourTowerDescription);
-  }, 1000 * 60 * 3);
-
-  // @ts-ignore
-  function useInterval(callback, delay) {
-    const savedCallback = useRef();
-
-    useEffect(() => {
-      savedCallback.current = callback;
-    }, [callback]);
-
-    useEffect(() => {
-      function tick() {
-        // @ts-ignore
-        savedCallback.current();
-      }
-
-      let id = setInterval(tick, delay);
-      return () => clearInterval(id);
-    }, [delay]);
-  }
 
   return (
     <>
@@ -141,15 +103,17 @@ export const Navigation: FC = () => {
             style={{ whiteSpace: "nowrap", userSelect: "none",}}
             onClick={() => {
               if (!navigationOpen) {
-                radio.gregRequest();
+                void refreshTowers();
               }
-
               dispatch(setNavigationOpen(!navigationOpen));
             }}
           >
             navigation
             {tunePatP === radio.our && !hasPublishedStation && " *"}
           </button>
+          {navigationOpen && isRefreshing && (
+            <span className="text-[0.6rem] mt-1 text-gray-500">refreshing...</span>
+          )}
 
           {navigationOpen && (
             <div>
@@ -168,10 +132,11 @@ export const Navigation: FC = () => {
                             border px-1 text-left inline-block \
                             flex-initial mr-2 my-1"
                     style={{ whiteSpace: "nowrap" }}
-                    onClick={() => {
-                      radio.gregPut(description);
+                    onClick={async () => {
+                      await radio.publishStation(description);
                       dispatch(setHasPublishedStation(true));
-                      radio.gregRequest();
+                      dispatch(setOurTowerDescription(description));
+                      void refreshTowers();
                     }}
                   >
                     <span>publish my station</span>

@@ -23,7 +23,7 @@ export const InitialSplash: FC = () => {
   return (
     <main className="flex justify-center overflow-scroll items-center">
       <div className="bg-white mt-2 rounded p-2 lg:w-1/2 mx-6 content-center">
-        <h1 className="text-lg font-bold m-2">urbit radio</h1>
+        <h1 className="text-lg font-bold m-2">radio</h1>
         <p className="m-2">first, interact with the webpage so we can autoplay videos</p>
         <p className="m-2">
           press any key to continue, or

@@ -1,572 +1,670 @@
-import Urbit from "@urbit/http-api";
 import ReactPlayer from "react-player";
 import store from "./app/store";
-import { isValidPatp } from 'urbit-ob';
-import { formatTimestamp } from "./util";
-import { setHasPublishedStation, setIsConnecting, setNavigationOpen, setOurTowerDescription, setPlayerInSync, setPlayerReady, setTunePatP } from "./features/ui/uiSlice";
+import {
+  setHasPublishedStation,
+  setIsConnecting,
+  setNavigationOpen,
+  setOurTowerDescription,
+  setPlayerInSync,
+  setPlayerReady,
+  setTunePatP,
+} from "./features/ui/uiSlice";
 import { resetStation } from "./features/station/stationSlice";
 import { chatInputId } from "./components/ChatColumn";
+import { isValidPatp } from "urbit-ob";
 
 const badDJMessage =
-    "You do not have permission to use that command on this station. Try using your station";
+  "You do not have permission to use that command on this station. Try using your station";
+
+const STORAGE_KEY = "radio.credentials";
+const DEFAULT_WORKER_BASE =
+  ((import.meta.env.VITE_WORKER_BASE as string | undefined) ||
+    (window.location.hostname === "localhost"
+      ? "http://localhost:8787"
+      : window.location.origin));
+
+type Credentials = {
+  username: string;
+  password: string;
+};
+
+type PendingCommand = {
+  command: string;
+  payload?: unknown;
+};
+
+export type StationSummary = {
+  location: string;
+  description: string;
+  viewers: number;
+  time: number;
+  isPublic: boolean;
+};
 
 export class Radio {
-    our: string;
-    api: Urbit;
+  workerBase: string;
+  our: string = "~";
+  hub: string = "~zod";
+  credentials: Credentials | null = null;
+  socket: WebSocket | null = null;
+  desiredStation: string | null = null;
+  activeStation: string | null = null;
+  pendingCommands: PendingCommand[] = [];
+  handleSub: ((update: any) => void) | null = null;
+  dispatch: any;
+  reconnectTimer: number | null = null;
+  synth: SpeechSynthesis;
 
-    // window.speechSynthesizer
-    synth: any;
+  constructor(workerBase: string = DEFAULT_WORKER_BASE) {
+    this.workerBase = workerBase.replace(/\/$/, "");
+    this.synth = window.speechSynthesis;
+  }
 
-    hub: string = "~dyl";
+  static async create() {
+    const radio = new Radio();
+    await radio.ensureCredentials();
+    radio.our = radio.credentials!.username;
+    return radio;
+  }
 
-    constructor() {
-        this.our = "~" + window.ship;
-        this.api = new Urbit("", "", window.desk);
-        this.api.ship = window.ship;
-        this.synth = window.speechSynthesis;
-        this.api.onOpen = () => {console.log('connection established')}
-        this.api.onError= (e) => {
-            console.log("api onError", e)
+  private async ensureCredentials(): Promise<Credentials> {
+    if (this.credentials) return this.credentials;
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored) as Credentials;
+        const ok = await this.login(parsed);
+        if (ok) {
+          this.credentials = parsed;
+          return parsed;
         }
-        this.api.onReconnect = () => {
-            console.log("api onReconnect??")
+      } catch (_e) {
+        // ignore corrupt storage
+      }
+      localStorage.removeItem(STORAGE_KEY);
+    }
+
+    const password = this.randomPassword();
+    const fresh = await this.register(password);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(fresh));
+    this.credentials = fresh;
+    return fresh;
+  }
+
+  private async login(credentials: Credentials) {
+    try {
+      const response = await fetch(`${this.workerBase}/api/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(credentials),
+      });
+      return response.ok;
+    } catch (_e) {
+      return false;
+    }
+  }
+
+  private async register(password: string): Promise<Credentials> {
+    const response = await fetch(`${this.workerBase}/api/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    if (!response.ok) {
+      throw new Error("failed to register");
+    }
+    const payload = (await response.json()) as { username: string };
+    return { username: payload.username, password };
+  }
+
+  private randomPassword() {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+
+  public watchTenna(handleSub: (update: any) => void, dispatch: any) {
+    this.handleSub = handleSub;
+    this.dispatch = dispatch;
+    void this.ensureCredentials().then(() => {
+      this.our = this.credentials!.username;
+      window.addEventListener("beforeunload", () => this.tune(null));
+
+      const initial = this.determineInitialStation();
+      this.tuneAndReset(dispatch, initial);
+    });
+  }
+
+  private determineInitialStation(): string {
+    const queryString = window.location.search;
+    const urlParams = new URLSearchParams(queryString);
+    const station = urlParams.get("station");
+    if (!station) {
+      return this.hub;
+    }
+    switch (station) {
+      case "hub":
+        return this.hub;
+      case "our":
+        return this.our;
+      default:
+        return station;
+    }
+  }
+
+  private buildWsUrl(station: string) {
+    const url = new URL(
+      `/api/rooms/${encodeURIComponent(station)}/ws`,
+      this.workerBase
+    );
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.searchParams.set("username", this.credentials!.username);
+    url.searchParams.set("password", this.credentials!.password);
+    return url.toString();
+  }
+
+  private openSocket(station: string) {
+    if (!this.credentials) return;
+    this.desiredStation = station;
+    if (this.socket) {
+      const existing = this.socket;
+      this.socket = null;
+      existing.close(1000, "reconnect");
+    }
+    const url = this.buildWsUrl(station);
+    const socket = new WebSocket(url);
+    this.socket = socket;
+
+    socket.addEventListener("open", () => {
+      if (this.socket !== socket) return;
+      this.activeStation = station;
+      this.flushPendingCommands();
+    });
+
+    socket.addEventListener("message", (event) => {
+      if (this.socket !== socket) return;
+      try {
+        const data = JSON.parse(event.data);
+        if (this.handleSub) {
+          this.handleSub(data);
         }
-        // this.synth.onvoiceschanged = (v: any) => {
-        //     console.log('radio voices', v)
-        //     // TODO check if voices is empty
-        //     //  users have had empty voices in ubuntu + brave
-        // }
-    }
+      } catch (_e) {
+        // ignore malformed payloads
+      }
+    });
 
-    public watchTenna(handleSub: any, dispatch: any) {
-        this.api
-            .subscribe({
-                app: "tenna",
-                path: "/frontend",
-                event: handleSub,
-                quit: () => alert("lost connection to your urbit. please refresh"),
-                err: (e) => console.log("radio err", e),
-            })
-            .then((subscriptionId) => {
-                //
-                window.addEventListener("beforeunload", () => {
-                    this.tune(null);
-                    this.api.unsubscribe(subscriptionId);
-                    this.api.delete();
-                });
-                // tune to hub by default
-                const queryString = window.location.search;
-                const urlParams = new URLSearchParams(queryString);
-                const station = urlParams.get("station");
-                if (!station) {
-                    dispatch(setTunePatP(this.hub))
-                    this.tune(this.hub);
-                    return;
-                }
-                let locationPatP = this.hub;
-                switch (station) {
-                    case "hub":
-                        locationPatP = this.hub;
-                        break;
-                    case "our":
-                        locationPatP = this.our;
-                        break;
-                    default:
-                        locationPatP = station!;
-                        break;
-                }
-                dispatch(setTunePatP(locationPatP))
-                this.tune(locationPatP);
-            });
-    }
-
-    public seekToGlobal(player: ReactPlayer | null, startedTime: number) {
-        // respond to !time command or seek from update
-        // this sets the player to the appropriate time
-
-        // no funny numbers
-        // started time is a unix timestamp
-        if (startedTime === 0) return;
-
-        if (!player) return;
-
-        var currentUnixTime = Date.now() / 1000;
-        var duration = player.getDuration();
-
-        if (!duration) return;
-
-        let globalProgress = Math.ceil(currentUnixTime - startedTime) % duration;
-
-        console.log("seeking to :", formatTimestamp(Math.round(globalProgress)));
-        player.seekTo(globalProgress, "seconds");
-    }
-
-    public resyncAll(player: ReactPlayer | null, hostPatp: string, url: string) {
-        if (!player) return;
-        let time = player.getCurrentTime();
-        if (!time) return;
-        if (!url) return;
-
-        if (hostPatp !== this.our) {
-            return;
+    socket.addEventListener("close", (event) => {
+      if (this.socket !== socket && station !== this.desiredStation) return;
+      if (this.activeStation === station) {
+        this.activeStation = null;
+      }
+      if (event.code === 4403) {
+        alert("you were removed from this station");
+        if (this.dispatch) {
+          this.tuneAndReset(this.dispatch, this.our);
         }
-        this.setTime(url, time);
+        return;
+      }
+      if (this.desiredStation === station) {
+        this.scheduleReconnect(station);
+      }
+    });
+
+    socket.addEventListener("error", () => {
+      socket.close();
+    });
+  }
+
+  private scheduleReconnect(station: string) {
+    if (this.reconnectTimer) {
+      window.clearTimeout(this.reconnectTimer);
+    }
+    this.reconnectTimer = window.setTimeout(() => {
+      if (this.desiredStation === station) {
+        this.openSocket(station);
+      }
+    }, 1500);
+  }
+
+  private flushPendingCommands() {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    while (this.pendingCommands.length > 0) {
+      const next = this.pendingCommands.shift();
+      if (!next) break;
+      this.socket.send(
+        JSON.stringify({
+          type: "command",
+          command: next.command,
+          payload: next.payload,
+        })
+      );
+    }
+  }
+
+  private queueCommand(command: string, payload?: unknown) {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this.socket.send(
+        JSON.stringify({ type: "command", command, payload: payload ?? null })
+      );
+    } else {
+      this.pendingCommands.push({ command, payload });
+      if (this.pendingCommands.length > 64) {
+        this.pendingCommands.shift();
+      }
+    }
+  }
+
+  private async sendRoomCommand(room: string, command: string, payload?: any) {
+    const creds = await this.ensureCredentials();
+    const response = await fetch(
+      `${this.workerBase}/api/rooms/${encodeURIComponent(room)}/command`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          username: creds.username,
+          password: creds.password,
+          command,
+          payload: payload ?? null,
+        }),
+      }
+    );
+    if (!response.ok) {
+      throw new Error("command failed");
+    }
+  }
+
+  public seekToGlobal(player: ReactPlayer | null, startedTime: number) {
+    if (startedTime === 0 || !player) return;
+    const currentUnixTime = Date.now() / 1000;
+    const duration = player.getDuration();
+    if (!duration) return;
+    const globalProgress = Math.ceil(currentUnixTime - startedTime) % duration;
+    player.seekTo(globalProgress, "seconds");
+  }
+
+  public resyncAll(player: ReactPlayer | null, hostPatp: string, url: string) {
+    if (!player || !url) return;
+    if (hostPatp !== this.our) return;
+    const time = player.getCurrentTime();
+    if (!time) return;
+    this.setTime(url, time);
+  }
+
+  public syncLive(player: ReactPlayer | null, hostPatp: string, url: string) {
+    if (hostPatp !== this.our || !player || !url) return;
+    const duration = player.getDuration();
+    if (!duration) return;
+    this.setTime(url, duration - 5);
+  }
+
+  public isAdmin() {
+    const tunePatP = store.getState().ui.tunePatP;
+    return tunePatP === this.our;
+  }
+
+  public isPromoted() {
+    const promoted = store.getState().station.promoted;
+    return promoted.includes(this.our);
+  }
+
+  public isAdminOrPromoted() {
+    return this.isAdmin() || this.isPromoted();
+  }
+
+  public canUseDJCommands() {
+    const permissions = store.getState().station.permissions;
+    if (permissions === "open") {
+      return true;
+    }
+    return this.isAdmin();
+  }
+
+  public chat(chat: string) {
+    this.queueCommand("chat", { message: chat });
+  }
+
+  public setPermissions(p: "open" | "closed") {
+    this.queueCommand("permissions", { value: p });
+  }
+
+  public public() {
+    this.queueCommand("public");
+  }
+
+  public private() {
+    this.queueCommand("private");
+  }
+
+  public spin(playUrl: string) {
+    if (!this.isAdminOrPromoted()) {
+      if (!this.canUseDJCommands()) {
+        alert(badDJMessage);
+        return;
+      }
+    }
+    if (!this.isValidHttpUrl(playUrl)) return;
+    const currentUnixTime = Math.ceil(Date.now() / 1000);
+    this.queueCommand("spin", {
+      url: playUrl,
+      time: currentUnixTime,
+    });
+  }
+
+  public setTime(playUrl: string, time: number) {
+    const customStartTime = Math.ceil(Date.now() / 1000) - Math.floor(time);
+    this.queueCommand("spin", {
+      url: playUrl,
+      time: customStartTime,
+    });
+  }
+
+  public talk(talkMsg: string) {
+    if (!this.isAdminOrPromoted()) {
+      if (!this.canUseDJCommands()) {
+        alert(badDJMessage);
+        return;
+      }
+    }
+    this.queueCommand("talk", { message: talkMsg });
+  }
+
+  public tune(tuneTo: string | null) {
+    this.desiredStation = tuneTo;
+    if (!tuneTo) {
+      if (this.socket) {
+        const existing = this.socket;
+        this.socket = null;
+        existing.close(1000, "logout");
+      }
+      return;
+    }
+    this.openSocket(tuneTo);
+  }
+
+  private updateUrlWithStation(station: string) {
+    const url = new URL(window.location.href);
+    const params = new URLSearchParams(url.search);
+    params.set("station", station);
+    url.search = params.toString();
+    window.history.replaceState(null, "", url.href);
+  }
+
+  public ping() {
+    this.queueCommand("presence");
+  }
+
+  public ban(her: string) {
+    this.queueCommand("ban", { target: her });
+  }
+
+  public unban(her: string) {
+    this.queueCommand("unban", { target: her });
+  }
+
+  public mod(her: string) {
+    this.queueCommand("mod", { target: her });
+  }
+
+  public unmod(her: string) {
+    this.queueCommand("unmod", { target: her });
+  }
+
+  public deleteChat(from: string, time: number) {
+    this.queueCommand("delete-chat", { from, time });
+  }
+
+  public async publishStation(description: string) {
+    await this.sendRoomCommand(this.our, "description", { value: description });
+    await this.sendRoomCommand(this.our, "public");
+    const creds = await this.ensureCredentials();
+    await fetch(`${this.workerBase}/api/towers/publish`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: creds.username,
+        password: creds.password,
+        description,
+      }),
+    });
+  }
+
+  public async unpublishStation() {
+    await this.sendRoomCommand(this.our, "private");
+    const creds = await this.ensureCredentials();
+    await fetch(`${this.workerBase}/api/towers/unpublish`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        username: creds.username,
+        password: creds.password,
+      }),
+    });
+  }
+
+  public async fetchStations(): Promise<StationSummary[]> {
+    const response = await fetch(`${this.workerBase}/api/towers`);
+    if (!response.ok) {
+      return [];
+    }
+    const listings = (await response.json()) as Array<{
+      location: string;
+      description: string;
+      viewers: number;
+      updatedAt: number;
+      isPublic: boolean;
+    }>;
+    return listings.map((entry) => ({
+      location: entry.location,
+      description: entry.description,
+      viewers: entry.viewers,
+      time: entry.updatedAt,
+      isPublic: entry.isPublic,
+    }));
+  }
+
+  public soundUrls = {
+    fart: "https://www.myinstants.com/media/sounds/fart-with-reverb.mp3",
+    click: "https://www.myinstants.com/media/sounds/minecraft_click.mp3",
+    orb: "https://www.myinstants.com/media/sounds/orb.mp3",
+  };
+
+  public imgUrls = {
+    athens: "https://bwyl.nyc3.digitaloceanspaces.com/radio/chat_images/athens.gif",
+    urbit: "https://bwyl.nyc3.digitaloceanspaces.com/radio/chat_images/urbit.png",
+    groove: "https://bwyl.nyc3.digitaloceanspaces.com/radio/chat_images/groove.gif",
+    cabbit: "https://bwyl.nyc3.digitaloceanspaces.com/radio/chat_images/cabbit.gif",
+  };
+
+  public tuneAndReset(dispatch: any, patp: string) {
+    this.tune(patp);
+    dispatch(setTunePatP(patp));
+    dispatch(setIsConnecting(true));
+    dispatch(resetStation());
+    dispatch(setPlayerReady(false));
+    dispatch(setNavigationOpen(false));
+    this.updateUrlWithStation(patp);
+  }
+
+  public async handleUserInput(dispatch: any) {
+    const input = document.getElementById(chatInputId) as HTMLInputElement;
+    const tunePatP = store.getState().ui.tunePatP;
+    const spinTime = store.getState().station.spinTime;
+    const spinUrl = store.getState().station.spinUrl;
+    const player: ReactPlayer | null = !window.playerRef
+      ? null
+      : (window.playerRef.current as ReactPlayer | null);
+
+    const chat = input.value;
+    input.value = "";
+
+    if (chat === "") return;
+
+    const got = this.getCommandArg(chat);
+    if (!got) {
+      this.chat(chat);
+      return;
     }
 
-    public syncLive(player: ReactPlayer | null, hostPatp: string, url: string) {
-        if (hostPatp !== this.our) return;
-        if (!player) return;
-
-        let duration = player.getDuration();
-
-        if (!duration) return;
-        if (!url) return;
-
-        this.setTime(url, duration - 5);
-    }
-
-    public isAdmin() {
-        const tunePatP = store.getState().ui.tunePatP;
-        return tunePatP === this.our;
-    }
-
-    public isPromoted() {
-        const promoted = store.getState().station.promoted;
-        return promoted.includes(this.our);
-    }
-
-    public isAdminOrPromoted() {
-        return this.isAdmin() || this.isPromoted();
-    }
-
-    public canUseDJCommands() {
+    const command = got.command;
+    let arg = got.arg;
+    switch (command) {
+      case "talk":
+        if (!this.isAdminOrPromoted()) {
+          alert(badDJMessage);
+          return;
+        }
+        this.chat(chat);
+        this.talk(arg);
+        break;
+      case "qtalk":
+        if (!this.isAdminOrPromoted()) return;
+        this.talk(arg);
+        break;
+      case "play":
+        if (!this.isAdminOrPromoted()) {
+          alert(badDJMessage);
+          return;
+        }
+        this.spin(arg);
+        this.chat(chat);
+        break;
+      case "qplay":
+        if (!this.isAdminOrPromoted()) return;
+        this.spin(arg);
+        break;
+      case "tune":
+        if (arg === "") arg = this.our;
+        this.chat(chat);
+        if (isValidPatp(arg)) {
+          this.tuneAndReset(dispatch, arg);
+        } else if (isValidPatp("~" + arg)) {
+          this.tuneAndReset(dispatch, "~" + arg);
+        }
+        break;
+      case "time":
+        dispatch(setPlayerInSync(true));
+        this.seekToGlobal(player, spinTime);
+        this.chat(chat);
+        break;
+      case "set-time":
+        this.resyncAll(player, tunePatP, spinUrl);
+        this.chat(chat);
+        break;
+      case "public":
+        if (!this.isAdmin()) {
+          return;
+        }
+        this.setPermissions("open");
+        this.chat(chat);
+        break;
+      case "party":
+        if (!this.isAdmin()) {
+          return;
+        }
         const permissions = store.getState().station.permissions;
-        if (permissions === 'open') {
-            return true;
+        if (permissions === "open") {
+          this.setPermissions("closed");
+        } else {
+          this.setPermissions("open");
         }
-        return this.isAdmin();
-    }
-
-    // api hits
-    public chat(chat: string) {
-        this.api.poke({
-            app: "tenna",
-            mark: "radio-action",
-            json: {
-                chat: {
-                    from: this.our,
-                    message: chat,
-                    time: 0,
-                },
-            },
-        });
-    }
-
-    public setPermissions(p: 'open' | 'closed') {
-        this.api.poke({
-            app: "tower",
-            mark: "radio-action",
-            json: { permissions: p },
-        });
-    }
-    public public() {
-        this.api.poke({
-            app: "tower",
-            mark: "radio-action",
-            json: { public: true },
-        });
-    }
-
-    public private() {
-        this.api.poke({
-            app: "tower",
-            mark: "radio-action",
-            json: { public: false },
-        });
-    }
-
-    public spin(playUrl: string) {
+        this.chat(chat);
+        break;
+      case "private":
+        if (!this.isAdmin()) {
+          return;
+        }
+        this.setPermissions("closed");
+        this.chat(chat);
+        break;
+      case "ban":
         if (!this.isAdminOrPromoted()) {
-            if (!this.canUseDJCommands()) {
-                alert(badDJMessage);
-                return;
-            }
+          return;
         }
-        if (!this.isValidHttpUrl(playUrl)) return;
-        let currentUnixTime = Date.now();
-        currentUnixTime = Math.ceil(currentUnixTime);
-        this.api.poke({
-            app: "tenna",
-            mark: "radio-action",
-            json: {
-                spin: {
-                    url: playUrl,
-                    time: currentUnixTime,
-                },
-            },
-        });
-    }
-
-    public setTime(playUrl: string, time: number) {
-        time = time * 1000;
-        let customStartTime = Date.now() - time;
-        customStartTime = Math.ceil(customStartTime);
-        this.api.poke({
-            app: "tenna",
-            mark: "radio-action",
-            json: {
-                spin: {
-                    url: playUrl,
-                    time: customStartTime,
-                },
-            },
-        });
-    }
-
-    public talk(talkMsg: string) {
+        this.ban(arg);
+        this.chat(chat);
+        break;
+      case "unban":
         if (!this.isAdminOrPromoted()) {
-            if (!this.canUseDJCommands()) {
-                alert(badDJMessage);
-                return;
-            }
+          return;
         }
-        this.api.poke({
-            app: "tenna",
-            mark: "radio-action",
-            json: { talk: talkMsg },
-        });
-    }
-
-    public tune(tuneTo: string | null) {
-        this.api.poke({
-            app: "tenna",
-            mark: "radio-action",
-            json: { tune: tuneTo },
-        });
-    }
-
-    public ping() {
-        console.log("sending presence heartbeat");
-        this.api.poke({
-            app: "tenna",
-            mark: "radio-action",
-            json: { presence: null },
-        });
-    }
-
-    public ban(her: string) {
-        this.api.poke({
-            app: "tenna",
-            mark: "radio-admin",
-            json: { ban: her },
-        });
-    }
-
-    public unban(her: string) {
-        this.api.poke({
-            app: "tenna",
-            mark: "radio-admin",
-            json: { unban: her },
-        });
-    }
-
-    public mod(her: string) {
-        this.api.poke({
-            app: "tenna",
-            mark: "radio-admin",
-            json: { mod: her },
-        });
-    }
-
-    public unmod(her: string) {
-        this.api.poke({
-            app: "tenna",
-            mark: "radio-admin",
-            json: { unmod: her },
-        });
-    }
-
-    public deleteChat(from: string, time:number) {
-        this.api.poke({
-            app: "tenna",
-            mark: "radio-action",
-            json: { 'delete-chat': {
-                from: from,
-                time: time
-            } },
-        });
-    }
-
-    public gregRequest() {
-        this.api.poke({
-            app: "tower",
-            mark: "greg-event",
-            json: { request: null },
-        });
-    }
-
-    public gregRemove(patp: string) {
-        this.api.poke({
-            app: "tower",
-            mark: "greg-event",
-            json: { remove: patp },
-        });
-    }
-
-    public gregPut(description: string) {
-        this.api.poke({
-            app: "tower",
-            mark: "greg-event",
-            json: {
-                put: {
-                    description: description,
-                    location: this.our,
-                    time: 0,
-                    viewers: 0,
-                },
-            },
-        });
-    }
-
-    public chatImage(command: string) {
-        // @ts-ignore
-        let img = this.imgUrls[command];
-        if (!img) return;
-        this.chat(img);
-    }
-
-    public soundUrls = {
-        fart: "https://www.myinstants.com/media/sounds/fart-with-reverb.mp3",
-        click: "https://www.myinstants.com/media/sounds/minecraft_click.mp3",
-        orb: "https://www.myinstants.com/media/sounds/orb.mp3",
-    };
-
-    public imgUrls = {
-        athens: "https://bwyl.nyc3.digitaloceanspaces.com/radio/chat_images/athens.gif",
-        urbit: "https://bwyl.nyc3.digitaloceanspaces.com/radio/chat_images/urbit.png",
-        groove: "https://bwyl.nyc3.digitaloceanspaces.com/radio/chat_images/groove.gif",
-        cabbit: "https://bwyl.nyc3.digitaloceanspaces.com/radio/chat_images/cabbit.gif",
-    };
-
-    // util
-    public isValidHttpUrl(string: string) {
-        let url;
-
-        try {
-            url = new URL(string);
-        } catch (_) {
-            return false;
+        this.unban(arg);
+        this.chat(chat);
+        break;
+      case "mod":
+        if (!this.isAdmin()) {
+          return;
         }
-
-        return url.protocol === "http:" || url.protocol === "https:";
-    }
-
-    public tuneAndReset(dispatch: any, patp: string) {
-        this.tune(patp);
-        // this.tunedTo = null;
-        dispatch(setTunePatP(patp));
-        dispatch(setIsConnecting(true));
-        dispatch(resetStation());
-        dispatch(setPlayerReady(false));
-        dispatch(setNavigationOpen(false));
-    }
-
-    public handleUserInput(dispatch: any) {
-        let input = document.getElementById(chatInputId) as HTMLInputElement;
-        const tunePatP = store.getState().ui.tunePatP;
-        const spinTime = store.getState().station.spinTime;
-        const spinUrl = store.getState().station.spinUrl;
-        // @ts-ignore
-        let player: any = !window.playerRef ? null : window.playerRef.current
-
-        let chat = input.value;
-        input.value = '';
-
-        if (chat === '') return;
-
-        // check for commands
-        let got = this.getCommandArg(chat);
-        if (!got) {
-            // just a regular chat message
-            this.chat(chat);
-            return;
+        this.mod(arg);
+        break;
+      case "unmod":
+        if (!this.isAdmin()) {
+          return;
         }
-
-        // interpreting message as a command
-        let command = got.command;
-        let arg = got.arg;
-        switch (command) {
-            case 'talk':
-                if (!this.isAdminOrPromoted()) {
-                    alert(badDJMessage);
-                    return;
-                }
-                this.chat(chat);
-                this.talk(arg);
-                break;
-            case 'qtalk':
-                if (!this.isAdminOrPromoted()) return;
-                this.talk(arg);
-                break;
-            case 'play':
-                if (!this.isAdminOrPromoted()) {
-                    alert(badDJMessage);
-                    return;
-                }
-                this.spin(arg);
-                this.chat(chat);
-                break;
-            case 'qplay':
-                if (!this.isAdminOrPromoted()) return;
-                this.spin(arg);
-                break;
-            case 'tune':
-                if (arg === '') arg = this.our;
-                this.chat(chat);
-                if (isValidPatp(arg)) {
-                    this.tuneAndReset(dispatch, arg);
-                }
-                else if (isValidPatp('~' + arg)) {
-                    this.tuneAndReset(dispatch, '~' + arg);
-                }
-                break;
-            case 'time':
-                dispatch(setPlayerInSync(true));
-                this.seekToGlobal(player, spinTime);
-                this.chat(chat);
-                break;
-            case 'set-time':
-                // if(!this.isAdmin())) {
-                //   return;
-                // }
-                this.resyncAll(player, tunePatP, spinUrl);
-                this.chat(chat);
-                break;
-            case 'public':
-                if (!this.isAdmin()) {
-                    return;
-                }
-                this.setPermissions('open');
-                this.chat(chat);
-                break;
-            case 'party':
-                if (!this.isAdmin()) {
-                    return;
-                }
-                const permissions = store.getState().station.permissions;
-                if (permissions === 'open') {
-                    this.setPermissions('closed');
-                } else {
-                    this.setPermissions('open');
-                }
-                this.chat(chat);
-                break;
-            case 'private':
-                if (!this.isAdmin()) {
-                    return;
-                }
-                this.setPermissions('closed')
-                this.chat(chat);
-                break;
-            case 'ban':
-                if (!this.isAdminOrPromoted()) {
-                    return;
-                }
-                this.ban(arg);
-                this.chat(chat);
-                break;
-            case 'unban':
-                if (!this.isAdminOrPromoted()) {
-                    return;
-                }
-                this.unban(arg);
-                this.chat(chat);
-                break;
-            case 'mod':
-                if (!this.isAdmin()) {
-                    return;
-                }
-                this.mod(arg);
-                break;
-            case 'unmod':
-                if (!this.isAdmin()) {
-                    return;
-                }
-                this.unmod(arg);
-                break;
-            case 'ping':
-                this.ping();
-                // this.chat(chat);
-                break;
-            // case 'wave':
-            //   this.chat(chat);
-            //   break;
-            // case 'scroll':
-            //   this.chat(chat);
-            //   break;
-            // case 'typing':
-            //   this.chat(chat);
-            //   break;
-            case 'logout':
-                this.tune(null);
-                break;
-            case 'live':
-                this.syncLive(player, tunePatP, spinUrl);
-                this.chat(chat);
-                break;
-            case 'publish':
-                if (!this.canUseDJCommands()) {
-                    return;
-                }
-                this.gregPut(arg);
-                this.chat(chat);
-                dispatch(setHasPublishedStation(true));
-                dispatch(setOurTowerDescription(arg))
-                this.gregRequest();
-                break;
-            case 'qpublish':
-                if (!this.canUseDJCommands()) {
-                    return;
-                }
-                this.gregPut(arg);
-                dispatch(setHasPublishedStation(true));
-                dispatch(setOurTowerDescription(arg))
-                this.gregRequest();
-                break;
-            case 'unpublish':
-                if (!this.canUseDJCommands()) return;
-                this.gregRemove(this.our);
-                this.chat(chat);
-                dispatch(setHasPublishedStation(false));
-                this.gregRequest();
-                break;
-            // image commands
-            default:
-                this.chatImage(command);
-                break;
-            //
+        this.unmod(arg);
+        break;
+      case "ping":
+        this.ping();
+        break;
+      case "logout":
+        this.tune(null);
+        break;
+      case "live":
+        this.syncLive(player, tunePatP, spinUrl);
+        this.chat(chat);
+        break;
+      case "publish":
+        if (!this.canUseDJCommands()) {
+          return;
         }
+        await this.publishStation(arg);
+        this.chat(chat);
+        dispatch(setHasPublishedStation(true));
+        dispatch(setOurTowerDescription(arg));
+        break;
+      case "qpublish":
+        if (!this.canUseDJCommands()) {
+          return;
+        }
+        await this.publishStation(arg);
+        dispatch(setHasPublishedStation(true));
+        dispatch(setOurTowerDescription(arg));
+        break;
+      case "unpublish":
+        if (!this.canUseDJCommands()) return;
+        await this.unpublishStation();
+        this.chat(chat);
+        dispatch(setHasPublishedStation(false));
+        break;
+      default:
+        this.chatImage(command);
+        break;
     }
-    // parse from user input
-    private getCommandArg(chat: string) {
-        // if(!(chat[0] === '!' || chat[0] === '|' || chat[0] === '+' || chat[0] === ':')) return;
-        if (!(chat[0] === '!')) return;
+  }
 
-        let splitIdx = chat.indexOf(' ');
-        if (splitIdx === -1) return { 'command': chat.slice(1), 'arg': '' };
-        let command = chat.slice(1, splitIdx);
-        let arg = chat.slice(splitIdx + 1);
-        return { 'command': command, 'arg': arg };
+  private getCommandArg(chat: string) {
+    if (!(chat[0] === "!")) return;
+
+    const splitIdx = chat.indexOf(" ");
+    if (splitIdx === -1) return { command: chat.slice(1), arg: "" };
+    const command = chat.slice(1, splitIdx);
+    const arg = chat.slice(splitIdx + 1);
+    return { command, arg };
+  }
+
+  private isValidHttpUrl(string: string) {
+    try {
+      const url = new URL(string);
+      return url.protocol === "http:" || url.protocol === "https:";
+    } catch (_e) {
+      return false;
     }
-    public async getBasketImages() {
-        let gotImages = await this.api.scry({
-            app: 'basket',
-            path: '/images'
-        });
-        return gotImages
-    }
+  }
 
-
-
+  public chatImage(command: string) {
+    const img = (this.imgUrls as Record<string, string | undefined>)[command];
+    if (!img) return;
+    this.chat(img);
+  }
 }
-

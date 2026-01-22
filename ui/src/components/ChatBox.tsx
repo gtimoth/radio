@@ -195,7 +195,7 @@ export function ChatBox({ }: {}) {
           <div 
             className={`text-red-500 cursor-pointer inline-block ${isAdminOrPromoted ? 'opacity-0 group-hover:opacity-100' : 'opacity-0'}`}
             onClick={(e) => {
-              window.radio.deleteChat(chat.from, chat.time*1000)
+              window.radio.deleteChat(chat.from, chat.time)
             }}
           >
             delete

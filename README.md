@@ -1,19 +1,10 @@
-# radio
+# Urbit %radio
 
-watch videos and listen to music with your friends on urbit.
+%radio was a peer to peer app on [urbit](https://urbit.org) providing a live chat over a time-synced video.
 
-viewing parties, audio/video curation, scheduled broadcasting, or just hanging out.
+It's been repurposed as a normal website with the original ui preserved.
 
-## Desk
+Users are given comet identities.
 
-there are two agents: tower and tenna.
+~zod is the admin.
 
-tenna manages a single subscription to a remote tower configurable from the UI.
-
-tower stores a configurable url+timestamp for media and relays chat messages to all subscribers.
-
-## UI
-
-the radio frontend uses the react-player npm library to play media based on a url+timestamp.
-
-every radio station has its own chatroom. to interact with radio, users type commands into chat.

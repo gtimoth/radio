@@ -116,8 +116,8 @@ export const PlayerColumn: FC = () => {
         <button
           className={`hover:pointer px-4 py-2 \
                   flex-initial outline-none \
-                  font-bold underline border-black border-t-0 \
-                  ${helpMenuOpen ? "border" : ""}`}
+                  font-bold underline border border-t-0 \
+                  ${helpMenuOpen ? "border-black" : "border-white"}`}
           onClick={(e) => {
             setHelpMenuLeft(e.clientX - (isMobile ? 30 : 0));
             setHelpMenuTop(isMobile ? window.innerHeight : e.clientY);
