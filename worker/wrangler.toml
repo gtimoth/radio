@@ -16,4 +16,5 @@ class_name = "AuthDurable"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["RoomDurable", "DirectoryDurable", "AuthDurable"]
+new_sqlite_classes = ["RoomDurable", "DirectoryDurable", "AuthDurable"]
+
