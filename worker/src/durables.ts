@@ -181,10 +181,10 @@ export class RoomDurable {
   }
 
   private async deleteRoom() {
-    // Close all connected clients
+    // Close all connected clients with special code to prevent reconnect
     for (const client of this.clients.values()) {
       try {
-        client.socket.close(1000, 'station deleted');
+        client.socket.close(4404, 'station deleted');
       } catch (_err) {
         // ignore
       }

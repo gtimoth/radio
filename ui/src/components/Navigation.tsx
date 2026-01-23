@@ -59,6 +59,11 @@ export const Navigation: FC = () => {
     refreshTowers();
   }, [refreshTowers]);
 
+  // Refresh towers when tuned station changes (e.g., after deletion)
+  useEffect(() => {
+    void refreshTowers();
+  }, [tunePatP]);
+
   useEffect(() => {
     if (!navigationOpen) return;
     const interval = setInterval(() => {

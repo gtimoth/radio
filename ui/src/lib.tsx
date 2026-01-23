@@ -218,6 +218,13 @@ export class Radio {
         }
         return;
       }
+      if (event.code === 4404) {
+        // Station was deleted, don't reconnect
+        if (this.dispatch) {
+          this.tuneAndReset(this.dispatch, this.hub);
+        }
+        return;
+      }
       if (this.desiredStation === station) {
         this.scheduleReconnect(station);
       }
