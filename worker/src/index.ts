@@ -1,11 +1,8 @@
-import { patp } from 'urbit-ob';
 import { AuthDurable, DirectoryDurable, RoomDurable } from './durables';
 export { AuthDurable, DirectoryDurable, RoomDurable };
 export type { Env } from "./durables";
-import { parseJson } from "./utils";
 import {
   parseJson,
-  jsonResponse,
   emptyResponse,
   badRequest,
   unauthorized,
@@ -14,16 +11,13 @@ import {
   sanitizeRoomName,
   cloneRequestWithHeaders,
   hashPassword,
-  randomComet,
-  RESERVED_NAMES,
 } from "./utils";
-
-
 
 type Env = {
   ROOM: DurableObjectNamespace;
   DIRECTORY: DurableObjectNamespace;
   AUTH: DurableObjectNamespace;
+  ZOD_PASSWORD?: string;
 };
 
 type Credentials = {
@@ -37,39 +31,11 @@ type RegisterRequest = {
 
 type LoginRequest = Credentials;
 
-type DirectoryPublishRequest = Credentials & {
-  description: string;
-};
-
 type CommandRequestBody = {
   username: string;
   password: string;
   command: string;
   payload?: unknown;
-};
-
-type DirectoryUpdatePayload = {
-  username: string;
-  description: string;
-  viewers: number;
-  updatedAt: number;
-  isPublic: boolean;
-};
-
-const corsHeaders: Record<string, string> = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-};
-
-const buildHeaders = (extra?: Record<string, string>): Headers => {
-  const headers = new Headers(corsHeaders);
-  if (extra) {
-    for (const [key, value] of Object.entries(extra)) {
-      headers.set(key, value);
-    }
-  }
-  return headers;
 };
 
 export default {
@@ -111,41 +77,23 @@ export default {
       return stub.fetch('https://directory/list');
     }
 
-    if (
-      url.pathname === '/api/towers/publish' &&
-      request.method === 'POST'
-    ) {
-      const body = await parseJson<DirectoryPublishRequest>(request);
-      if (!body?.description) {
-        return badRequest('description required');
+    // Login as ~zod with secret password
+    if (url.pathname === '/api/login-zod' && request.method === 'POST') {
+      const body = await parseJson<{ password?: string }>(request);
+      if (!body?.password) {
+        return badRequest('password required');
       }
-      const valid = await verifyCredentials(env, body);
-      if (!valid) {
+      if (!env.ZOD_PASSWORD || body.password !== env.ZOD_PASSWORD) {
         return unauthorized();
       }
-      const stub = env.DIRECTORY.get(env.DIRECTORY.idFromName('directory'));
-      return stub.fetch('https://directory/publish', {
+      // Create or get ~zod credentials
+      const stub = env.AUTH.get(env.AUTH.idFromName('auth'));
+      const response = await stub.fetch('https://auth/get-or-create-zod', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ password: body.password }),
       });
-    }
-
-    if (
-      url.pathname === '/api/towers/unpublish' &&
-      request.method === 'POST'
-    ) {
-      const body = await parseJson<Credentials>(request);
-      const valid = await verifyCredentials(env, body ?? undefined);
-      if (!valid || !body) {
-        return unauthorized();
-      }
-      const stub = env.DIRECTORY.get(env.DIRECTORY.idFromName('directory'));
-      return stub.fetch('https://directory/unpublish', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
+      return response;
     }
 
     if (url.pathname.startsWith('/api/rooms/')) {
@@ -203,42 +151,3 @@ export default {
     return notFound();
   },
 };
-
-type StoredUser = {
-  passwordHash: string;
-  createdAt: number;
-};
-
-
-type DirectoryEntry = {
-  location: string;
-  description: string;
-  viewers: number;
-  updatedAt: number;
-  isPublic: boolean;
-};
-
-
-type ChatMessage = {
-  message: string;
-  from: string;
-  time: number;
-};
-
-type RoomState = {
-  description: string;
-  spinUrl: string;
-  spinTime: number;
-  permissions: 'open' | 'closed';
-  chatlog: ChatMessage[];
-  promoted: string[];
-  banned: string[];
-  isPublic: boolean;
-};
-
-type RoomClient = {
-  id: string;
-  user: string;
-  socket: WebSocket;
-};
-

@@ -8,11 +8,7 @@ import {
 import {
   setNavigationOpen,
   selectNavigationOpen,
-  selectHasPublishedStation,
-  selectOurTowerDescription,
-  setHasPublishedStation,
   selectTunePatP,
-  setOurTowerDescription,
 } from "../features/ui/uiSlice";
 import {
   isOlderThanNMinutes,
@@ -42,8 +38,6 @@ export const Navigation: FC = () => {
 
   const tunePatP = useAppSelector(selectTunePatP);
   const permissions = useAppSelector(selectPermissions);
-  const hasPublishedStation = useAppSelector(selectHasPublishedStation);
-  const ourTowerDescription = useAppSelector(selectOurTowerDescription);
   const description = useAppSelector(selectDescription);
   const navigationOpen = useAppSelector(selectNavigationOpen);
   const dispatch = useAppDispatch();
@@ -109,7 +103,6 @@ export const Navigation: FC = () => {
             }}
           >
             navigation
-            {tunePatP === radio.our && !hasPublishedStation && " *"}
           </button>
           {navigationOpen && isRefreshing && (
             <span className="text-[0.6rem] mt-1 text-gray-500">refreshing...</span>
@@ -126,23 +119,6 @@ export const Navigation: FC = () => {
                   overflowY: "scroll",
                 }}
               >
-                {tunePatP === radio.our && !hasPublishedStation && (
-                  <button
-                    className="hover:pointer border-blue-700 text-blue-700  \
-                            border px-1 text-left inline-block \
-                            flex-initial mr-2 my-1"
-                    style={{ whiteSpace: "nowrap" }}
-                    onClick={async () => {
-                      await radio.publishStation(description);
-                      dispatch(setHasPublishedStation(true));
-                      dispatch(setOurTowerDescription(description));
-                      void refreshTowers();
-                    }}
-                  >
-                    <span>publish my station</span>
-                  </button>
-                )}
-
                 {tunePatP !== radio.our && (
                   <NavItem
                     patp={radio.our}

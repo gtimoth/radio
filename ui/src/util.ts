@@ -21,8 +21,6 @@ import {
   setNavigationOpen,
   setPlayerInSync,
   setIsConnecting,
-  setHasPublishedStation,
-  setOurTowerDescription
 } from './features/ui/uiSlice';
 
 import {isValidPatp} from 'urbit-ob';
@@ -202,9 +200,6 @@ export function handleUpdate(update: any, radio: Radio, dispatch: any, userInter
       dispatch(setPermissions(perm))
       break;
     case 'description':
-      if(radio.isAdmin()) {
-        dispatch(setOurTowerDescription(update['description']))
-      }
       dispatch(setDescription(update['description']))
       break;
     case 'delete-chat':

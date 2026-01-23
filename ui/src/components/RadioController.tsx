@@ -25,7 +25,7 @@ export const RadioController: FC = () => {
 
   if (isMobile) {
     return (
-      <div className="p-1 flex flex-col h-screen text-xs font-mono overflow-hidden">
+      <div className="p-1 flex flex-col text-xs font-mono overflow-hidden" style={{ height: '100dvh' }}>
         <div className="flex-none">
           <Navigation />
         </div>

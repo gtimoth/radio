@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { BrowserRouter as Router, Route, Routes, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Route, Routes, Navigate, useParams, useNavigate } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from './app/hooks';
 import { RadioController } from './components/RadioController';
 import { handleUpdate } from './util';
 import { Radio } from './lib';
 import { ChatBox } from './components/ChatBox';
 import { selectUpdate, setUpdate } from './features/ui/uiSlice';
+import { LoginPage } from './components/LoginPage';
 
 
 
@@ -73,7 +74,9 @@ export function App() {
     <Router>
       <Routes>
         <Route path="/" element={<MemoizedRadioController />} />
+        <Route path="/s/:station" element={<MemoizedRadioController />} />
         <Route path="/chat" element={<MemoizedChatBox />} />
+        <Route path="/login" element={<LoginPage />} />
       </Routes>
     </Router>
   );

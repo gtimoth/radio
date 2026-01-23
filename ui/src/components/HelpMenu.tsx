@@ -21,11 +21,6 @@ export const HelpMenu: FC<IHelpMenu> = (props: IHelpMenu) => {
     >
     <p className='mb-4'> click <strong>navigation</strong> in the top left to discover active stations</p>
 
-    <p className="italic mb-2">COMMANDS:</p>
-    <p className="font-bold">!tune ~sampel-palnet</p>
-    <div className="ml-4 mb-4">
-      <p> change radio stations. try ~nodmyn-dosrux </p>
-    </div>
     {/* <p className="font-bold">!tune</p>
     <div className="ml-4 mb-4">
       <p>(no argument) go to your home station</p>
@@ -59,7 +54,6 @@ export const HelpMenu: FC<IHelpMenu> = (props: IHelpMenu) => {
       <br></br>
       <p>-----------</p>
       <br></br>
-      <p>join ~nodmyn-dosrux/research</p>
     
       {/* <p className="font-bold">
       !set-time

@@ -18,3 +18,6 @@ class_name = "AuthDurable"
 tag = "v1"
 new_sqlite_classes = ["RoomDurable", "DirectoryDurable", "AuthDurable"]
 
+# To set the ZOD_PASSWORD secret, run:
+# wrangler secret put ZOD_PASSWORD
+

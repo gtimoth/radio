@@ -21,6 +21,67 @@ export type Env = {
   AUTH: DurableObjectNamespace;
 };
 
+type StoredUser = {
+  passwordHash: string;
+  createdAt: number;
+};
+
+type DirectoryEntry = {
+  location: string;
+  description: string;
+  viewers: number;
+  updatedAt: number;
+};
+
+type DirectoryUpdatePayload = {
+  username: string;
+  description: string;
+  viewers: number;
+  updatedAt: number;
+};
+
+type ChatMessage = {
+  message: string;
+  from: string;
+  time: number;
+};
+
+type RoomState = {
+  description: string;
+  spinUrl: string;
+  spinTime: number;
+  permissions: 'open' | 'closed';
+  chatlog: ChatMessage[];
+  promoted: string[];
+  banned: string[];
+};
+
+type RoomClient = {
+  id: string;
+  user: string;
+  socket: WebSocket;
+};
+
+type RegisterRequest = {
+  password?: string;
+};
+
+type LoginRequest = {
+  username: string;
+  password: string;
+};
+
+type DirectoryPublishRequest = LoginRequest & {
+  description: string;
+};
+
+type Credentials = {
+  username: string;
+  password: string;
+};
+
+const ZOD_USERNAME = '~zod';
+
 export class RoomDurable {
   private state: DurableObjectState;
   private env: Env;
@@ -92,13 +153,12 @@ export class RoomDurable {
   private defaultState(): RoomState {
     return {
       description: '',
-      spinUrl: '',
+      spinUrl: 'https://www.youtube.com/watch?v=M04AKTCDavc',
       spinTime: 0,
       permissions: 'closed',
       chatlog: [],
       promoted: [],
       banned: [],
-      isPublic: true,
     };
   }
 
@@ -202,7 +262,6 @@ export class RoomDurable {
       description: this.roomState.description,
       viewers: this.viewerList().length,
       updatedAt: Date.now(),
-      isPublic: this.roomState.isPublic,
     };
     const stub = this.env.DIRECTORY.get(
       this.env.DIRECTORY.idFromName('directory')
@@ -241,12 +300,6 @@ export class RoomDurable {
         break;
       case 'description':
         await this.handleDescription(user, state, data.payload);
-        break;
-      case 'public':
-        await this.handlePublicToggle(user, state, true);
-        break;
-      case 'private':
-        await this.handlePublicToggle(user, state, false);
         break;
       case 'presence':
         // heartbeat, nothing special needed
@@ -289,6 +342,8 @@ export class RoomDurable {
   }
 
   private isAdmin(user: string) {
+    // ~zod has admin permissions on all stations
+    if (user === ZOD_USERNAME) return true;
     return this.roomName === user;
   }
 
@@ -349,16 +404,6 @@ export class RoomDurable {
     state.description = value;
     await this.persistState();
     this.broadcast({ description: value });
-  }
-
-  private async handlePublicToggle(
-    user: string,
-    state: RoomState,
-    isPublic: boolean
-  ) {
-    if (!this.isAdmin(user)) return;
-    state.isPublic = isPublic;
-    await this.persistState();
   }
 
   private async handleBan(
@@ -475,44 +520,7 @@ export class DirectoryDurable {
     const url = new URL(request.url);
     if (url.pathname === '/list' && request.method === 'GET') {
       const entries = await this.loadEntries();
-      return jsonResponse(Object.values(entries).filter((e) => e.isPublic));
-    }
-
-    if (url.pathname === '/publish' && request.method === 'POST') {
-      const body = await parseJson<DirectoryPublishRequest>(request);
-      if (!body?.username || !body.description) {
-        return badRequest('invalid payload');
-      }
-      const entries = await this.loadEntries();
-      const existing = entries[body.username] || {
-        location: body.username,
-        description: '',
-        viewers: 0,
-        updatedAt: Date.now(),
-        isPublic: true,
-      };
-      entries[body.username] = {
-        ...existing,
-        description: body.description,
-        updatedAt: Date.now(),
-        isPublic: true,
-      };
-      await this.saveEntries(entries);
-      return jsonResponse(entries[body.username]);
-    }
-
-    if (url.pathname === '/unpublish' && request.method === 'POST') {
-      const body = await parseJson<Credentials>(request);
-      if (!body?.username) {
-        return badRequest('invalid payload');
-      }
-      const entries = await this.loadEntries();
-      if (entries[body.username]) {
-        entries[body.username].isPublic = false;
-        entries[body.username].updatedAt = Date.now();
-        await this.saveEntries(entries);
-      }
-      return jsonResponse({ ok: true });
+      return jsonResponse(Object.values(entries));
     }
 
     if (url.pathname === '/heartbeat' && request.method === 'POST') {
@@ -526,7 +534,6 @@ export class DirectoryDurable {
         description: payload.description,
         viewers: payload.viewers,
         updatedAt: payload.updatedAt,
-        isPublic: payload.isPublic,
       };
       await this.saveEntries(entries);
       return jsonResponse(entries[payload.username]);
@@ -596,6 +603,25 @@ export class AuthDurable {
       const credentials = await parseJson<LoginRequest>(request);
       const valid = await this.validate(credentials);
       return jsonResponse({ valid });
+    }
+
+    // Get or create ~zod credentials (called after password verification in main handler)
+    if (url.pathname === '/get-or-create-zod' && request.method === 'POST') {
+      const body = await parseJson<{ password?: string }>(request);
+      if (!body?.password) {
+        return badRequest('password required');
+      }
+      const users = await this.loadUsers();
+      const passwordHash = await hashPassword(body.password);
+
+      // Create ~zod if doesn't exist, or update password if it does
+      users[ZOD_USERNAME] = {
+        passwordHash,
+        createdAt: users[ZOD_USERNAME]?.createdAt ?? Date.now(),
+      };
+      await this.saveUsers(users);
+
+      return jsonResponse({ username: ZOD_USERNAME, password: body.password });
     }
 
     return notFound();

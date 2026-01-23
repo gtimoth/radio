@@ -1,10 +1,8 @@
 import ReactPlayer from "react-player";
 import store from "./app/store";
 import {
-  setHasPublishedStation,
   setIsConnecting,
   setNavigationOpen,
-  setOurTowerDescription,
   setPlayerInSync,
   setPlayerReady,
   setTunePatP,
@@ -38,7 +36,6 @@ export type StationSummary = {
   description: string;
   viewers: number;
   time: number;
-  isPublic: boolean;
 };
 
 export class Radio {
@@ -104,6 +101,26 @@ export class Radio {
     }
   }
 
+  public async loginAsZod(password: string): Promise<boolean> {
+    try {
+      const response = await fetch(`${this.workerBase}/api/login-zod`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      if (!response.ok) {
+        return false;
+      }
+      const data = (await response.json()) as Credentials;
+      this.credentials = data;
+      this.our = data.username;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      return true;
+    } catch (_e) {
+      return false;
+    }
+  }
+
   private async register(password: string): Promise<Credentials> {
     const response = await fetch(`${this.workerBase}/api/register`, {
       method: "POST",
@@ -137,20 +154,15 @@ export class Radio {
   }
 
   private determineInitialStation(): string {
-    const queryString = window.location.search;
-    const urlParams = new URLSearchParams(queryString);
-    const station = urlParams.get("station");
-    if (!station) {
-      return this.hub;
+    // Check for /s/:station path format
+    const pathMatch = window.location.pathname.match(/^\/s\/(.+)$/);
+    if (pathMatch) {
+      const station = decodeURIComponent(pathMatch[1]);
+      if (station === "hub") return this.hub;
+      if (station === "our") return this.our;
+      return station;
     }
-    switch (station) {
-      case "hub":
-        return this.hub;
-      case "our":
-        return this.our;
-      default:
-        return station;
-    }
+    return this.hub;
   }
 
   private buildWsUrl(station: string) {
@@ -300,6 +312,8 @@ export class Radio {
   }
 
   public isAdmin() {
+    // ~zod has admin permissions on all stations
+    if (this.our === "~zod") return true;
     const tunePatP = store.getState().ui.tunePatP;
     return tunePatP === this.our;
   }
@@ -327,14 +341,6 @@ export class Radio {
 
   public setPermissions(p: "open" | "closed") {
     this.queueCommand("permissions", { value: p });
-  }
-
-  public public() {
-    this.queueCommand("public");
-  }
-
-  public private() {
-    this.queueCommand("private");
   }
 
   public spin(playUrl: string) {
@@ -384,11 +390,8 @@ export class Radio {
   }
 
   private updateUrlWithStation(station: string) {
-    const url = new URL(window.location.href);
-    const params = new URLSearchParams(url.search);
-    params.set("station", station);
-    url.search = params.toString();
-    window.history.replaceState(null, "", url.href);
+    const newPath = `/s/${encodeURIComponent(station)}`;
+    window.history.replaceState(null, "", newPath);
   }
 
   public ping() {
@@ -415,34 +418,6 @@ export class Radio {
     this.queueCommand("delete-chat", { from, time });
   }
 
-  public async publishStation(description: string) {
-    await this.sendRoomCommand(this.our, "description", { value: description });
-    await this.sendRoomCommand(this.our, "public");
-    const creds = await this.ensureCredentials();
-    await fetch(`${this.workerBase}/api/towers/publish`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        username: creds.username,
-        password: creds.password,
-        description,
-      }),
-    });
-  }
-
-  public async unpublishStation() {
-    await this.sendRoomCommand(this.our, "private");
-    const creds = await this.ensureCredentials();
-    await fetch(`${this.workerBase}/api/towers/unpublish`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        username: creds.username,
-        password: creds.password,
-      }),
-    });
-  }
-
   public async fetchStations(): Promise<StationSummary[]> {
     const response = await fetch(`${this.workerBase}/api/towers`);
     if (!response.ok) {
@@ -453,14 +428,12 @@ export class Radio {
       description: string;
       viewers: number;
       updatedAt: number;
-      isPublic: boolean;
     }>;
     return listings.map((entry) => ({
       location: entry.location,
       description: entry.description,
       viewers: entry.viewers,
       time: entry.updatedAt,
-      isPublic: entry.isPublic,
     }));
   }
 
@@ -470,12 +443,13 @@ export class Radio {
     orb: "https://www.myinstants.com/media/sounds/orb.mp3",
   };
 
-  public imgUrls = {
-    athens: "https://bwyl.nyc3.digitaloceanspaces.com/radio/chat_images/athens.gif",
-    urbit: "https://bwyl.nyc3.digitaloceanspaces.com/radio/chat_images/urbit.png",
-    groove: "https://bwyl.nyc3.digitaloceanspaces.com/radio/chat_images/groove.gif",
-    cabbit: "https://bwyl.nyc3.digitaloceanspaces.com/radio/chat_images/cabbit.gif",
-  };
+  // Image commands temporarily disabled
+  // public imgUrls = {
+  //   athens: "https://bwyl.nyc3.digitaloceanspaces.com/radio/chat_images/athens.gif",
+  //   urbit: "https://bwyl.nyc3.digitaloceanspaces.com/radio/chat_images/urbit.png",
+  //   groove: "https://bwyl.nyc3.digitaloceanspaces.com/radio/chat_images/groove.gif",
+  //   cabbit: "https://bwyl.nyc3.digitaloceanspaces.com/radio/chat_images/cabbit.gif",
+  // };
 
   public tuneAndReset(dispatch: any, patp: string) {
     this.tune(patp);
@@ -614,31 +588,10 @@ export class Radio {
         this.syncLive(player, tunePatP, spinUrl);
         this.chat(chat);
         break;
-      case "publish":
-        if (!this.canUseDJCommands()) {
-          return;
-        }
-        await this.publishStation(arg);
-        this.chat(chat);
-        dispatch(setHasPublishedStation(true));
-        dispatch(setOurTowerDescription(arg));
-        break;
-      case "qpublish":
-        if (!this.canUseDJCommands()) {
-          return;
-        }
-        await this.publishStation(arg);
-        dispatch(setHasPublishedStation(true));
-        dispatch(setOurTowerDescription(arg));
-        break;
-      case "unpublish":
-        if (!this.canUseDJCommands()) return;
-        await this.unpublishStation();
-        this.chat(chat);
-        dispatch(setHasPublishedStation(false));
-        break;
       default:
-        this.chatImage(command);
+        // Image commands temporarily disabled - just send as regular chat
+        // this.chatImage(command);
+        this.chat(chat);
         break;
     }
   }
@@ -662,9 +615,10 @@ export class Radio {
     }
   }
 
-  public chatImage(command: string) {
-    const img = (this.imgUrls as Record<string, string | undefined>)[command];
-    if (!img) return;
-    this.chat(img);
-  }
+  // Image commands temporarily disabled
+  // public chatImage(command: string) {
+  //   const img = (this.imgUrls as Record<string, string | undefined>)[command];
+  //   if (!img) return;
+  //   this.chat(img);
+  // }
 }
