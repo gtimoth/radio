@@ -146,6 +146,31 @@ export default {
           }),
         });
       }
+
+      // Delete station - only ~zod can do this
+      if (parts[4] === 'delete' && request.method === 'POST') {
+        const body = await parseJson<Credentials>(request);
+        if (!body?.username || !body?.password) {
+          return badRequest('credentials required');
+        }
+        const valid = await verifyCredentials(env, body);
+        if (!valid) {
+          return unauthorized();
+        }
+        // Only ~zod can delete stations
+        if (body.username !== '~zod') {
+          return unauthorized();
+        }
+        const stub = env.ROOM.get(env.ROOM.idFromName(roomName));
+        return stub.fetch('https://room/delete', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'X-User': body.username,
+            'X-Room-Name': roomName,
+          },
+        });
+      }
     }
 
     return notFound();

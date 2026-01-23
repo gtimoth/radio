@@ -1,6 +1,12 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+html, body {
+    overscroll-behavior: none;
+    -webkit-overflow-scrolling: auto;
+}
+
 *{
     -ms-overflow-style: none;
 }

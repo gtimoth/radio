@@ -1,4 +1,4 @@
-import React, { FC, useEffect, useRef, useCallback } from "react";
+import React, { FC, useEffect, useRef } from "react";
 import { isMobile } from "react-device-detect";
 import { useAppDispatch } from "../app/hooks";
 import { ChatBox } from "./ChatBox";
@@ -23,8 +23,6 @@ export const ChatColumn: FC<IChatColumn> = (props: IChatColumn) => {
   const fullscreen = props.fullscreen;
   let maxWidth = isMobile ? "100%" : "33%";
 
-  const lastClickTimeRef = useRef(0);
-
   useEffect(() => {
     // autofocus input
     if (!inputReference) return;
@@ -44,20 +42,6 @@ export const ChatColumn: FC<IChatColumn> = (props: IChatColumn) => {
   }
 
   const InputBox = () => {
-    const handleQuickMessage = useCallback((message: string) => {
-      const currentTime = Date.now();
-      if (currentTime - lastClickTimeRef.current >= 1000) {
-        if (inputReference.current) {
-          inputReference.current.value = message;
-          void processInput();
-        }
-        lastClickTimeRef.current = currentTime;
-      }
-    }, []);
-
-    const currentDate = new Date();
-    const cutoffDate = new Date('2024-08-25');
-
     return (
       <div className="flex flex-col flex-1 h-full"
         style={{
@@ -99,21 +83,8 @@ export const ChatColumn: FC<IChatColumn> = (props: IChatColumn) => {
             send
           </button>
         </div>
-        <div className="flex-initial h-10 flex items-center" style={{ whiteSpace: 'nowrap', overflowX: 'auto' }}>
-          {['!urbit', '!athens', '!groove', '!cabbit']
-            .map((item, index) => (
-              <div
-                key={index}
-                className="inline-block border border-gray-400 text-gray-700 bg-white hover:bg-gray-100 cursor-pointer px-2 py-1 mr-2"
-                style={{
-                  fontSize:"0.65rem",
-                  userSelect:"none",
-                }}
-                onClick={() => handleQuickMessage(item)}
-              >
-                 {item}
-              </div>
-            ))}
+        <div className="flex-initial h-8 flex items-center text-gray-500" style={{ fontSize: '0.65rem' }}>
+          logged in as {radio.our}
         </div>
     </div>
     );

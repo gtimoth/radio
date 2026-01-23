@@ -13,7 +13,6 @@ import {
 import {
   isOlderThanNMinutes,
   maxTowerAgeInMinutes,
-  timestampFromTime,
 } from "../util";
 import { StationSummary } from "../lib";
 
@@ -43,10 +42,8 @@ export const Navigation: FC = () => {
   const dispatch = useAppDispatch();
 
   const [towers, setTowers] = useState<Array<StationSummary>>([]);
-  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const refreshTowers = useCallback(async () => {
-    setIsRefreshing(true);
     try {
       const listings = await radio.fetchStations();
       const { newTowers, oldTowers } = splitMinitowersByAge(listings);
@@ -55,8 +52,6 @@ export const Navigation: FC = () => {
       setTowers([...newTowers, ...oldTowers]);
     } catch (err) {
       console.warn("failed to load stations", err);
-    } finally {
-      setIsRefreshing(false);
     }
   }, [radio]);
 
@@ -104,9 +99,6 @@ export const Navigation: FC = () => {
           >
             navigation
           </button>
-          {navigationOpen && isRefreshing && (
-            <span className="text-[0.6rem] mt-1 text-gray-500">refreshing...</span>
-          )}
 
           {navigationOpen && (
             <div>

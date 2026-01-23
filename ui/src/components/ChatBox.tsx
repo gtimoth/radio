@@ -183,7 +183,7 @@ export function ChatBox({ }: {}) {
             {chat.from}
             {":"}
           </span>
-          <span className={"mr-2 text-gray-500 text-[0.6rem]"}>
+          <span className={"mr-2 text-gray-500 text-[0.6rem]"} style={{ whiteSpace: "nowrap" }}>
             {getRecencyText(currentTime - (chat.time * 1000))}
           </span>
         </div>
@@ -225,6 +225,30 @@ export function ChatBox({ }: {}) {
 
   const [banInput, setBanInput] = useState('');
   const [modInput, setModInput] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const isZod = window.radio.our === '~zod';
+  const canDeleteStation = isZod && tunePatP !== '~zod';
+
+  const handleDeleteStation = async () => {
+    if (!confirm(`Are you sure you want to delete station ${tunePatP}? This cannot be undone.`)) {
+      return;
+    }
+    setIsDeleting(true);
+    try {
+      const success = await window.radio.deleteStation(tunePatP);
+      if (success) {
+        alert('Station deleted');
+        window.radio.tuneAndReset(dispatch, window.radio.hub);
+      } else {
+        alert('Failed to delete station');
+      }
+    } catch (err) {
+      alert('Failed to delete station');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   return (
     <div
@@ -338,6 +362,18 @@ export function ChatBox({ }: {}) {
               </button>
             </div>
           </div>
+          {canDeleteStation && (
+            <div className="mt-4 pt-4 border-t border-gray-300">
+              <h3 className="font-bold text-red-600">Danger Zone</h3>
+              <button
+                onClick={handleDeleteStation}
+                disabled={isDeleting}
+                className="border border-red-600 text-red-600 px-2 py-1 text-sm hover:bg-red-50 mt-2 disabled:opacity-50"
+              >
+                {isDeleting ? 'deleting...' : 'delete station'}
+              </button>
+            </div>
+          )}
         </div>
       )}
       <div
@@ -349,11 +385,13 @@ export function ChatBox({ }: {}) {
           overflowWrap: "break-word",
         }}
       >
-        <div 
-          id={chatboxId} 
+        <div
+          id={chatboxId}
           className="overflow-y-auto overflow-x-hidden"
           style={{
             paddingTop: window.radio.isAdminOrPromoted() ? "40px" : "0",
+            WebkitOverflowScrolling: 'touch',
+            touchAction: 'pan-y',
           }}
           ref={chatboxRef}
           onScroll={handleScroll}

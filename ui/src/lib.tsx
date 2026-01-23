@@ -418,6 +418,27 @@ export class Radio {
     this.queueCommand("delete-chat", { from, time });
   }
 
+  public setDescription(description: string) {
+    this.queueCommand("description", { value: description });
+  }
+
+  public async deleteStation(station: string): Promise<boolean> {
+    try {
+      const creds = await this.ensureCredentials();
+      const response = await fetch(`${this.workerBase}/api/rooms/${encodeURIComponent(station)}/delete`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          username: creds.username,
+          password: creds.password,
+        }),
+      });
+      return response.ok;
+    } catch (_e) {
+      return false;
+    }
+  }
+
   public async fetchStations(): Promise<StationSummary[]> {
     const response = await fetch(`${this.workerBase}/api/towers`);
     if (!response.ok) {
@@ -587,6 +608,19 @@ export class Radio {
       case "live":
         this.syncLive(player, tunePatP, spinUrl);
         this.chat(chat);
+        break;
+      case "publish":
+        if (!this.isAdmin()) {
+          return;
+        }
+        this.setDescription(arg);
+        this.chat(chat);
+        break;
+      case "qpublish":
+        if (!this.isAdmin()) {
+          return;
+        }
+        this.setDescription(arg);
         break;
       default:
         // Image commands temporarily disabled - just send as regular chat

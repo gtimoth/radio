@@ -119,10 +119,21 @@ export class RoomDurable {
     }
 
     if (request.method === 'POST') {
+      const url = new URL(request.url);
       const user = request.headers.get('X-User');
       if (!user) {
         return unauthorized();
       }
+
+      // Handle delete request (only ~zod can delete)
+      if (url.pathname === '/delete') {
+        if (user !== ZOD_USERNAME) {
+          return unauthorized();
+        }
+        await this.deleteRoom();
+        return jsonResponse({ ok: true });
+      }
+
       const payload = await parseJson<{ command?: string; payload?: unknown }>(
         request
       );
@@ -167,6 +178,36 @@ export class RoomDurable {
       await this.state.storage.put('state', this.roomState);
       await this.notifyDirectory();
     }
+  }
+
+  private async deleteRoom() {
+    // Close all connected clients
+    for (const client of this.clients.values()) {
+      try {
+        client.socket.close(1000, 'station deleted');
+      } catch (_err) {
+        // ignore
+      }
+    }
+    this.clients.clear();
+    this.viewerCounts.clear();
+
+    // Remove from directory
+    if (this.roomName) {
+      const stub = this.env.DIRECTORY.get(
+        this.env.DIRECTORY.idFromName('directory')
+      );
+      await stub.fetch('https://directory/remove', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username: this.roomName }),
+      });
+    }
+
+    // Clear all storage
+    await this.state.storage.deleteAll();
+    this.roomState = null;
+    this.roomName = null;
   }
 
   private handleSession(socket: WebSocket, user: string) {
@@ -537,6 +578,17 @@ export class DirectoryDurable {
       };
       await this.saveEntries(entries);
       return jsonResponse(entries[payload.username]);
+    }
+
+    if (url.pathname === '/remove' && request.method === 'POST') {
+      const body = await parseJson<{ username?: string }>(request);
+      if (!body?.username) {
+        return badRequest('invalid payload');
+      }
+      const entries = await this.loadEntries();
+      delete entries[body.username];
+      await this.saveEntries(entries);
+      return jsonResponse({ ok: true });
     }
 
     return notFound();

@@ -26,11 +26,18 @@ export const NavItem: FC<INavItem> = (props: INavItem) => {
         style={{ whiteSpace: "nowrap" }}
         onClick={() => radio.tuneAndReset(dispatch, patp)}
       >
-        <span>
+        <div>
           {flare && `${flare} `}
           {title ? title : patp}
-          {description && ` | ${description}`}
-        </span>
+        </div>
+        {description && (
+          <div
+            className="text-gray-500"
+            style={{ fontSize: "0.65rem" }}
+          >
+            {description}
+          </div>
+        )}
       </button>
     );
   };
@@ -47,13 +54,20 @@ export const NavItem: FC<INavItem> = (props: INavItem) => {
         }}
         onClick={() => radio.tuneAndReset(dispatch, patp)}
       >
-        <span>
+        <div>
           <span className={"mr-2 text-gray-500"}>
             {timestampFromTime(time!)}
           </span>
           {title ? title : patp}
-          {description && ` | ${description}`}
-        </span>
+        </div>
+        {description && (
+          <div
+            className="text-gray-500"
+            style={{ fontSize: "0.65rem" }}
+          >
+            {description}
+          </div>
+        )}
       </button>
     );
   };
