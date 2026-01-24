@@ -164,7 +164,7 @@ export class RoomDurable {
   private defaultState(): RoomState {
     return {
       description: '',
-      spinUrl: 'https://www.youtube.com/watch?v=M04AKTCDavc',
+      spinUrl: 'https://youtu.be/XGC80iRS7tw',
       spinTime: 0,
       permissions: 'closed',
       chatlog: [],
